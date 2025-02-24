@@ -17,7 +17,7 @@ os.environ['MKL_SERVICE_FORCE_INTEL'] = '1'
 os.environ['MUJOCO_GL'] = 'egl'
 
 
-class Trainer:
+class Collector:
     def __init__(self, cfg):
         self.cfg = cfg
 
@@ -80,6 +80,16 @@ class Trainer:
             cfg.algo,
             self.device
         )
+        
+        # load pretrained model
+        if algo_cls == DrQv2:
+            path = cfg.algo.pretrained_path
+            self.agent.actor.load_state_dict(torch.load(f"{path}/actor.pt"))
+            self.agent.critic.load_state_dict(torch.load(f"{path}/critic.pt"))
+            self.agent.encoder.load_state_dict(torch.load(f"{path}/encoder.pt"))
+        else:
+            raise NotImplementedError
+        
 
         self.global_step = 0
         self.global_episode = 0
@@ -91,75 +101,37 @@ class Trainer:
     def global_frame(self):
         return self.global_step * self.cfg.action_repeat
 
-    def train(self):
-        cfg = self.cfg
-
-        ep_step, ep_return, ep_succ = 0, 0, 0
-        time_step = self.train_env.reset()
-        self.replay_buffer.add(time_step)
-        for i_frame in trange(cfg.train_frames // cfg.action_repeat + 1, desc="main"):
-            if time_step.last():
-                self.global_episode += 1
-                ep_frame = ep_step * cfg.action_repeat
-                self.logger.log_scalars("", {
-                    "rollout/return": ep_return,
-                    "rollout/success": (ep_succ >= 1.0)*1.0 if self.domain == "metaworld" else 0.0,
-                    "rollout/episode_frame": ep_frame
-                }, step=self.global_frame)
-
-                time_step = self.train_env.reset()
-                self.replay_buffer.add(time_step)
-                ep_step = ep_return = ep_succ = 0
-
-            if self.global_frame < cfg.random_frames:
-                sample = self.train_env.action_spec().generate_value()
-                action = np.random.uniform(low=-1, high=1, size=sample.shape)
-                action = action.astype(sample.dtype)
-                train_metrics = {}
-            else:
-                if cfg.pretrain_steps > 0 and self.global_frame == cfg.random_frames:
-                    for i_pretrain in trange(cfg.pretrain_steps, desc="pretrain"):
-                        pretrain_metrics = self.agent.pretrain_step(self.replay_buffer, step=i_pretrain)
-                action = self.agent.select_action(time_step.observation, self.global_step, deterministic=False)
-                for i_update in range(cfg.utd):
-                    train_metrics = self.agent.train_step(self.replay_buffer, self.global_step)
-
-            if self.global_frame % cfg.log_frames == 0:
-                self.logger.log_scalars("", train_metrics, step=self.global_frame)
-                
-
-            if self.global_frame % cfg.eval_frames == 0:
-                eval_metrics = self.evaluate()
-                self.logger.log_scalars("eval", eval_metrics, step=self.global_frame)
-                self.logger.info(eval_metrics)
-
-                # save the best model
-                if eval_metrics["return_mean"] > self.best_return:
-                    self.best_return = eval_metrics["return_mean"]
-                    self.save("best_return.pt")
-                    
-                if eval_metrics["success_mean"] > self.best_success:
-                    self.best_success = eval_metrics["success_mean"]
-                    self.save("best_success.pt")
-
-            time_step = self.train_env.step(action)
-            ep_return += time_step.reward
-            ep_step += 1
-            if self.domain == "metaworld":
-                ep_succ += time_step.success
-            self.replay_buffer.add(time_step)
-            self.global_step += 1
-
-    def save(self, name):
-        dir = os.path.join(self.logger.log_dir, name)
-                
-        # torch.save(obj=self.agent.vae.state_dict(), f=os.path.join(dir, "vae.pt"))
-        # torch.save(obj=self.agent.actor.state_dict(), f=os.path.join(dir, "actor.pt"))
-        # torch.save(obj=self.agent.critic.state_dict(), f=os.path.join(dir, "critic.pt"))
-        self.logger.log_object(name="vae.pt", object=self.agent.vae.state_dict(), path=dir)
-        self.logger.log_object(name="actor.pt", object=self.agent.actor.state_dict(), path=dir)
-        self.logger.log_object(name="critic.pt", object=self.agent.critic.state_dict(), path=dir)
-
+    def collect(self):
+        eval_metrics = self.evaluate()
+        self.logger.log_scalars("eval", eval_metrics, step=self.global_frame)
+        self.logger.info(eval_metrics)
+        
+    def save(
+            self, 
+            observation_list,
+            action_list,
+            reward_list,
+            is_terminal_list,
+            is_success_list,
+            is_first_list,
+            is_last_list,
+            eval_episode
+        ):
+        is_success = 1 in is_success_list
+        path = f"expert_{self.cfg.algo.cls}_{self.cfg.task}/{eval_episode}_success{is_success}_length{len(observation_list)}.npz"
+        
+        # turn list to numpy array
+        np.savez(
+            path,
+            observation=np.array(observation_list, dtype=np.uint8),
+            action=np.array(action_list, dtype=np.float32),
+            reward=np.array(reward_list, dtype=np.float32),
+            is_terminal=np.array(is_terminal_list, dtype=bool),
+            is_success=np.array(is_success_list, dtype=bool),
+            is_first=np.array(is_first_list, dtype=bool),
+            is_last=np.array(is_last_list, dtype=bool)
+        )
+        
     def evaluate(self):
         self.agent.train(False)
         all_lengths = []
@@ -169,6 +141,15 @@ class Trainer:
             time_step = self.eval_env.reset()
             length = ret = success = 0
             self.recorder.init(self.eval_env, enabled=(i_episode==0))
+            
+            observation_list = []
+            action_list = []
+            reward_list = []
+            is_terminal_list = []
+            is_success_list = []
+            is_first_list = []
+            is_last_list = []
+            
             while not time_step.last():
                 action = self.agent.select_action(time_step.observation, self.global_step, deterministic=True)
                 time_step = self.eval_env.step(action)
@@ -177,6 +158,29 @@ class Trainer:
                 length += 1
                 if hasattr(time_step, "success"):
                     success += float(time_step.success)
+                    
+                # save to buffer
+                observation_list.append(time_step.observation)
+                action_list.append(action)
+                reward_list.append(time_step.reward)
+                is_terminal_list.append(time_step.last() or time_step.success)
+                is_success_list.append(time_step.success)
+                is_first_list.append(len(observation_list) == 1)
+                is_last_list.append(time_step.last())
+                
+                if time_step.last():
+                    self.save(
+                        observation_list,
+                        action_list,
+                        reward_list,
+                        is_terminal_list,
+                        is_success_list,
+                        is_first_list,
+                        is_last_list,
+                        self.cfg.eval_episode
+                    )
+                
+                
             self.recorder.save(f"eval_{self.global_frame}.mp4")
             all_lengths.append(length)
             all_returns.append(ret)
@@ -202,8 +206,8 @@ class Trainer:
 
 @hydra.main(version_base=None, config_path="./config/visual", config_name="config")
 def main(cfg: DictConfig) -> None:
-    trainer = Trainer(cfg)
-    trainer.train()
+    c = Collector(cfg)
+    c.collect()
 
 if __name__ == "__main__":
     main()
