@@ -133,14 +133,20 @@ class Trainer:
                 self.logger.log_scalars("eval", eval_metrics, step=self.global_frame)
                 self.logger.info(eval_metrics)
 
-                # save the best model
-                if eval_metrics["return_mean"] > self.best_return:
+                self.save("last", eval_metrics)
+
+                # save the best model 
+                if eval_metrics["return_mean"] > self.best_return and eval_metrics["success_mean"] >= self.best_success:
                     self.best_return = eval_metrics["return_mean"]
-                    self.save("best_return.pt")
-                    
-                if eval_metrics["success_mean"] > self.best_success:
                     self.best_success = eval_metrics["success_mean"]
-                    self.save("best_success.pt")
+                    self.save("best_return", eval_metrics)
+                    
+                    if self.best_success == 1:
+                        break
+                    
+                # if eval_metrics["success_mean"] > self.best_success:
+                #     self.best_success = eval_metrics["success_mean"]
+                #     self.save("best_success")
 
             time_step = self.train_env.step(action)
             ep_return += time_step.reward
@@ -150,15 +156,27 @@ class Trainer:
             self.replay_buffer.add(time_step)
             self.global_step += 1
 
-    def save(self, name):
+    def save(self, name, eval_metrics):
         dir = os.path.join(self.logger.log_dir, name)
                 
         # torch.save(obj=self.agent.vae.state_dict(), f=os.path.join(dir, "vae.pt"))
         # torch.save(obj=self.agent.actor.state_dict(), f=os.path.join(dir, "actor.pt"))
         # torch.save(obj=self.agent.critic.state_dict(), f=os.path.join(dir, "critic.pt"))
-        self.logger.log_object(name="vae.pt", object=self.agent.vae.state_dict(), path=dir)
+        if self.cfg.algo.cls == "diffsr_drqv2":
+            self.logger.log_object(name="vae.pt", object=self.agent.vae.state_dict(), path=dir)
+        elif self.cfg.algo.cls == "drqv2":
+            self.logger.log_object(name="encoder.pt", object=self.agent.encoder.state_dict(), path=dir)
+        else:
+            raise NotImplementedError
         self.logger.log_object(name="actor.pt", object=self.agent.actor.state_dict(), path=dir)
         self.logger.log_object(name="critic.pt", object=self.agent.critic.state_dict(), path=dir)
+        
+        info = f"{self.global_episode}, save {name}, return {eval_metrics['return_mean']}, success {eval_metrics['success_mean']}"
+        print(info)
+        
+        with open(f"{dir}/example.txt", "a") as file:
+            file.write(f"{info}\n")  # \n 确保内容写入后换行
+
 
     def evaluate(self):
         self.agent.train(False)

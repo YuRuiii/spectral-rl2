@@ -38,7 +38,7 @@ class Collector:
         )
         
         self.recorder = VideoRecorder(
-            self.logger.output_dir if cfg.save_video else None
+            self.logger.output_dir if (cfg.save_video and not cfg.debug) else None
         )
         self.seed = set_seed_everywhere(cfg.seed)
         self.device = set_device(cfg.device)
@@ -81,21 +81,49 @@ class Collector:
             self.device
         )
         
-        # load pretrained model
-        if algo_cls == DrQv2:
-            path = cfg.algo.pretrained_path
-            self.agent.actor.load_state_dict(torch.load(f"{path}/actor.pt"))
-            self.agent.critic.load_state_dict(torch.load(f"{path}/critic.pt"))
-            self.agent.encoder.load_state_dict(torch.load(f"{path}/encoder.pt"))
-        else:
-            raise NotImplementedError
-        
-
+        self.load_model()
         self.global_step = 0
         self.global_episode = 0
 
         self.best_return = 0
         self.best_success = 0
+        
+    def load_model(self):
+        # Load pretrained model
+        dir_name = os.listdir(f"/data2/wangyc/spectral-rl2/log/{self.cfg.algo.cls}/debug/{self.cfg.task}")[0]
+        path = f"/data2/wangyc/spectral-rl2/log/{self.cfg.algo.cls}/debug/{self.cfg.task}/{dir_name}/best_return"
+
+        # Load actor state_dict and check for missing/unexpected keys
+        actor_state_dict = torch.load(f"{path}/actor.pt")
+        actor_load_result = self.agent.actor.load_state_dict(actor_state_dict)
+        if actor_load_result.missing_keys or actor_load_result.unexpected_keys:
+            raise RuntimeError(f"Failed to load actor state_dict: {actor_load_result}")
+        print("Actor state_dict loaded successfully.")
+
+        # Load critic state_dict and check for missing/unexpected keys
+        critic_state_dict = torch.load(f"{path}/critic.pt")
+        critic_load_result = self.agent.critic.load_state_dict(critic_state_dict)
+        if critic_load_result.missing_keys or critic_load_result.unexpected_keys:
+            raise RuntimeError(f"Failed to load critic state_dict: {critic_load_result}")
+        print("Critic state_dict loaded successfully.")
+
+        # Load encoder or vae based on algorithm class
+        if self.cfg.algo.cls == "drqv2":
+            encoder_state_dict = torch.load(f"{path}/encoder.pt")
+            encoder_load_result = self.agent.encoder.load_state_dict(encoder_state_dict)
+            if encoder_load_result.missing_keys or encoder_load_result.unexpected_keys:
+                raise RuntimeError(f"Failed to load encoder state_dict: {encoder_load_result}")
+            print("Encoder state_dict loaded successfully.")
+
+        elif self.cfg.algo.cls == "diffsr_drqv2":
+            vae_state_dict = torch.load(f"{path}/vae.pt")
+            vae_load_result = self.agent.vae.load_state_dict(vae_state_dict)
+            if vae_load_result.missing_keys or vae_load_result.unexpected_keys:
+                raise RuntimeError(f"Failed to load vae state_dict: {vae_load_result}")
+            print("Vae state_dict loaded successfully.")
+
+        else:
+            raise NotImplementedError("The algorithm class is not supported.")
 
     @property
     def global_frame(self):
@@ -117,8 +145,9 @@ class Collector:
             is_last_list,
             eval_episode
         ):
-        is_success = 1 in is_success_list
-        path = f"expert_{self.cfg.algo.cls}_{self.cfg.task}/{eval_episode}_success{is_success}_length{len(observation_list)}.npz"
+        os.makedirs('/data2/wangyc/spectral-rl2/data', exist_ok=True)
+        os.makedirs(f'/data2/wangyc/spectral-rl2/data/{self.cfg.algo.cls}_{self.cfg.task}_expert', exist_ok=True)
+        path = f"/data2/wangyc/spectral-rl2/data/{self.cfg.algo.cls}_{self.cfg.task}_expert/{eval_episode}_success{int(sum(is_success_list))}.npz"
         
         # turn list to numpy array
         np.savez(
@@ -137,7 +166,7 @@ class Collector:
         all_lengths = []
         all_returns = []
         all_success = []
-        for i_episode in range(self.cfg.eval_episode):
+        for i_episode in trange(self.cfg.eval_episode):
             time_step = self.eval_env.reset()
             length = ret = success = 0
             self.recorder.init(self.eval_env, enabled=(i_episode==0))
@@ -156,8 +185,8 @@ class Collector:
                 self.recorder.record(self.eval_env)
                 ret += time_step.reward
                 length += 1
-                if hasattr(time_step, "success"):
-                    success += float(time_step.success)
+                # if hasattr(time_step, "success"):
+                success += float(time_step.success)
                     
                 # save to buffer
                 observation_list.append(time_step.observation)
@@ -177,7 +206,7 @@ class Collector:
                         is_success_list,
                         is_first_list,
                         is_last_list,
-                        self.cfg.eval_episode
+                        i_episode
                     )
                 
                 
