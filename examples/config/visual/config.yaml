@@ -12,6 +12,7 @@ debug: false
 name: debug
 device: null
 save_video: false
+mode: train
 
 # env
 task: metaworld_door-open
