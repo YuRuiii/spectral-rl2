@@ -4,7 +4,7 @@ defaults:
   - override hydra/job_logging: disabled
 
 # experiment
-log_dir: "/data2/wangyc/spectral-rl2/log"
+log_dir: "log"
 seed: 0
 debug: false
 name: debug

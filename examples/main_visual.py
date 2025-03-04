@@ -124,6 +124,7 @@ class Trainer:
                 self.logger.info(eval_metrics)
 
                 self.save_model("last", eval_metrics)
+                
                 saved_eval_metrics = self.evaluate_pretrained_model("last")
                 self.logger.log_scalars("eval_saved", saved_eval_metrics, step=self.global_frame)
 
@@ -241,7 +242,10 @@ class Trainer:
         
     def load_model(self, agent, name):
         # Load pretrained model
-        path = f"/{self.cfg.model_dir}/{name}"
+        if self.cfg.model_dir is None:
+            print("model_dir is not set, using default path")
+            self.cfg.model_dir = self.logger.log_dir
+        path = f"{self.cfg.model_dir}/{name}"
 
         agent.actor.load_state_dict(torch.load(f"{path}/actor.pt"))
         agent.critic.load_state_dict(torch.load(f"{path}/critic.pt"))
@@ -293,9 +297,9 @@ class Trainer:
         is_last_list,
         eval_episode
     ):
-        os.makedirs('/data2/wangyc/spectral-rl2/data', exist_ok=True)
-        os.makedirs(f'/data2/wangyc/spectral-rl2/data/{self.cfg.algo.cls}_{self.cfg.task}_expert', exist_ok=True)
-        path = f"/data2/wangyc/spectral-rl2/data/{self.cfg.algo.cls}_{self.cfg.task}_expert/{eval_episode}_success{int(sum(is_success_list))}.npz"
+        os.makedirs('/home/amax/yr/spectral-rl2/data', exist_ok=True)
+        os.makedirs(f'/home/amax/yr/spectral-rl2/data/{self.cfg.algo.cls}_{self.cfg.task}_expert', exist_ok=True)
+        path = f"/home/amax/yr/spectral-rl2/data/{self.cfg.algo.cls}_{self.cfg.task}_expert/{eval_episode}_success{int(sum(is_success_list))}.npz"
         
         # turn list to numpy array
         np.savez(
