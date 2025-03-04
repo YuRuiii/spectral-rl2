@@ -3,16 +3,15 @@ defaults:
   - override hydra/hydra_logging: disabled
   - override hydra/job_logging: disabled
 
-pretrained_path: best_return 
-
 # experiment
-log_dir: "log"
+log_dir: "/data2/wangyc/spectral-rl2/log"
 seed: 0
 debug: false
 name: debug
 device: null
-save_video: false
+save_video: true
 mode: train
+model_dir: null
 
 # env
 task: metaworld_door-open
@@ -31,5 +30,6 @@ random_frames: 4000
 pretrain_steps: ${algo.pretrain_steps}
 eval_frames: 10000
 log_frames: 1000
+save_frames: 1
 utd: 1
 eval_episode: 10

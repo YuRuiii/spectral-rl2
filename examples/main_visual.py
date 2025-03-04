@@ -68,24 +68,8 @@ class Trainer:
             frame_stack=cfg.frame_stack,
             data_specs=data_specs
         )
-
-        algo_cls = {
-            "drqv2": DrQv2,
-            "diffsr_drqv2": DiffSR_DrQv2,
-            "mulvrep_drqv2": MuLVRep_DrQv2
-        }.get(cfg.algo.cls)
-        self.agent = algo_cls(
-            self.train_env.observation_spec(),
-            self.train_env.action_spec(),
-            cfg.algo,
-            self.device
-        )
         
-        if cfg.mode == "train":
-            print("Training...")
-        elif cfg.mode == "collect":
-            print("Collecting data...")
-            self.load_model()
+        self.agent = self.get_agent()
 
         self.global_step = 0
         self.global_episode = 0
@@ -135,11 +119,13 @@ class Trainer:
                 
 
             if self.global_frame % cfg.eval_frames == 0:
-                eval_metrics = self.evaluate()
+                eval_metrics = self.evaluate_training_model()
                 self.logger.log_scalars("eval", eval_metrics, step=self.global_frame)
                 self.logger.info(eval_metrics)
 
                 self.save_model("last", eval_metrics)
+                saved_eval_metrics = self.evaluate_pretrained_model("last")
+                self.logger.log_scalars("eval_saved", saved_eval_metrics, step=self.global_frame)
 
                 # save the best model 
                 if eval_metrics["return_mean"] > self.best_return and eval_metrics["success_mean"] >= self.best_success:
@@ -149,11 +135,7 @@ class Trainer:
                     
                     if self.best_success == 1:
                         break
-                    
-                # if eval_metrics["success_mean"] > self.best_success:
-                #     self.best_success = eval_metrics["success_mean"]
-                #     self.save("best_success")
-
+                
             time_step = self.train_env.step(action)
             ep_return += time_step.reward
             ep_step += 1
@@ -162,8 +144,8 @@ class Trainer:
             self.replay_buffer.add(time_step)
             self.global_step += 1
             
-    def evaluate(self):
-        self.agent.train(False)
+    def evaluate(self, agent):
+        agent.train(False)
         all_lengths = []
         all_returns = []
         all_success = []
@@ -182,7 +164,7 @@ class Trainer:
                 is_last_list = []
             
             while not time_step.last():
-                action = self.agent.select_action(time_step.observation, self.global_step, deterministic=True)
+                action = agent.select_action(time_step.observation, self.global_step, deterministic=True)
                 time_step = self.eval_env.step(action)
                 self.recorder.record(self.eval_env)
                 ret += time_step.reward
@@ -201,7 +183,7 @@ class Trainer:
                     is_last_list.append(time_step.last())
                 
             if self.cfg.mode == "collect":
-                self.save(
+                self.save_data(
                     observation_list,
                     action_list,
                     reward_list,
@@ -228,52 +210,54 @@ class Trainer:
 
         # agent evaluate if needed
         if self.global_frame != 0: # make sure there is sample
-            agent_metrics, reconstruction = self.agent.evaluate(self.replay_buffer)
+            agent_metrics, reconstruction = agent.evaluate(self.replay_buffer)
             metrics.update(agent_metrics)
             if reconstruction is not None:
                 self.logger.log_image("info/reconstruction", reconstruction, step=self.global_frame)
-        self.agent.train(True)
+        agent.train(True)
         return metrics
     
-    def load_model(self):
+    def evaluate_training_model(self):
+        return self.evaluate(self.agent)
+
+    def evaluate_pretrained_model(self, name):
+        agent = self.get_agent()
+        agent = self.load_model(agent, name)
+        return self.evaluate(agent)
+    
+    def get_agent(self):
+        algo_cls = {
+            "drqv2": DrQv2,
+            "diffsr_drqv2": DiffSR_DrQv2,
+            "mulvrep_drqv2": MuLVRep_DrQv2
+        }.get(self.cfg.algo.cls)
+        agent = algo_cls(
+            self.train_env.observation_spec(),
+            self.train_env.action_spec(),
+            self.cfg.algo,
+            self.device
+        )
+        return agent
+        
+    def load_model(self, agent, name):
         # Load pretrained model
-        dir_name = os.listdir(f"/data2/wangyc/spectral-rl2/log/{self.cfg.algo.cls}/debug/{self.cfg.task}")[0]
-        path = f"/data2/wangyc/spectral-rl2/log/{self.cfg.algo.cls}/debug/{self.cfg.task}/{dir_name}/best_return"
+        path = f"/{self.cfg.model_dir}/{name}"
 
-        # Load actor state_dict and check for missing/unexpected keys
-        actor_state_dict = torch.load(f"{path}/actor.pt")
-        actor_load_result = self.agent.actor.load_state_dict(actor_state_dict)
-        if actor_load_result.missing_keys or actor_load_result.unexpected_keys:
-            raise RuntimeError(f"Failed to load actor state_dict: {actor_load_result}")
-        print("Actor state_dict loaded successfully.")
-
-        # Load critic state_dict and check for missing/unexpected keys
-        critic_state_dict = torch.load(f"{path}/critic.pt")
-        critic_load_result = self.agent.critic.load_state_dict(critic_state_dict)
-        if critic_load_result.missing_keys or critic_load_result.unexpected_keys:
-            raise RuntimeError(f"Failed to load critic state_dict: {critic_load_result}")
-        print("Critic state_dict loaded successfully.")
-
-        # Load encoder or vae based on algorithm class
+        agent.actor.load_state_dict(torch.load(f"{path}/actor.pt"))
+        agent.critic.load_state_dict(torch.load(f"{path}/critic.pt"))
         if self.cfg.algo.cls == "drqv2":
-            encoder_state_dict = torch.load(f"{path}/encoder.pt")
-            encoder_load_result = self.agent.encoder.load_state_dict(encoder_state_dict)
-            if encoder_load_result.missing_keys or encoder_load_result.unexpected_keys:
-                raise RuntimeError(f"Failed to load encoder state_dict: {encoder_load_result}")
-            print("Encoder state_dict loaded successfully.")
-
+            agent.encoder.load_state_dict(torch.load(f"{path}/encoder.pt"))
         elif self.cfg.algo.cls == "diffsr_drqv2":
-            vae_state_dict = torch.load(f"{path}/vae.pt")
-            vae_load_result = self.agent.vae.load_state_dict(vae_state_dict)
-            if vae_load_result.missing_keys or vae_load_result.unexpected_keys:
-                raise RuntimeError(f"Failed to load vae state_dict: {vae_load_result}")
-            print("Vae state_dict loaded successfully.")
-
+            agent.vae.load_state_dict(torch.load(f"{path}/vae.pt"))
         else:
-            raise NotImplementedError("The algorithm class is not supported.")
+            raise NotImplementedError
+        
+        return agent
+
 
     def save_model(self, name, eval_metrics):
         dir = os.path.join(self.logger.log_dir, name)
+        os.makedirs(dir, exist_ok=True)
                 
         if self.cfg.algo.cls == "drqv2":
             torch.save(obj=self.agent.encoder.state_dict(), f=os.path.join(dir, "encoder.pt"))
@@ -291,23 +275,24 @@ class Trainer:
         # self.logger.log_object(name="actor.pt", object=self.agent.actor.state_dict(), path=dir)
         # self.logger.log_object(name="critic.pt", object=self.agent.critic.state_dict(), path=dir)
         
-        info = f"{self.global_episode}, save {name}, return {eval_metrics['return_mean']}, success {eval_metrics['success_mean']}"
-        print(info)
+        if eval_metrics is not None:
+            info = f"{self.global_episode}, save {name}, return {eval_metrics['return_mean']}, success {eval_metrics['success_mean']}"
+            print(info)
         
-        with open(f"{dir}/example.txt", "a") as file:
-            file.write(f"{info}\n") 
+            with open(f"{dir}/example.txt", "a") as file:
+                file.write(f"{info}\n") 
             
     def save_data(
-            self, 
-            observation_list,
-            action_list,
-            reward_list,
-            is_terminal_list,
-            is_success_list,
-            is_first_list,
-            is_last_list,
-            eval_episode
-        ):
+        self, 
+        observation_list,
+        action_list,
+        reward_list,
+        is_terminal_list,
+        is_success_list,
+        is_first_list,
+        is_last_list,
+        eval_episode
+    ):
         os.makedirs('/data2/wangyc/spectral-rl2/data', exist_ok=True)
         os.makedirs(f'/data2/wangyc/spectral-rl2/data/{self.cfg.algo.cls}_{self.cfg.task}_expert', exist_ok=True)
         path = f"/data2/wangyc/spectral-rl2/data/{self.cfg.algo.cls}_{self.cfg.task}_expert/{eval_episode}_success{int(sum(is_success_list))}.npz"
@@ -323,16 +308,16 @@ class Trainer:
             is_first=np.array(is_first_list, dtype=bool),
             is_last=np.array(is_last_list, dtype=bool)
         )
-            
-    def collect_data(self):
-        eval_metrics = self.evaluate()
-        self.logger.log_scalars("eval", eval_metrics, step=self.global_frame)
-        self.logger.info(eval_metrics)
 
 @hydra.main(version_base=None, config_path="./config/visual", config_name="config")
 def main(cfg: DictConfig) -> None:
     trainer = Trainer(cfg)
-    trainer.train()
+    if cfg.mode == "train":
+        trainer.train()
+    elif cfg.mode == "collect":
+        trainer.evaluate_pretrained_model("last")
+    else:
+        raise NotImplementedError
 
 if __name__ == "__main__":
     main()
