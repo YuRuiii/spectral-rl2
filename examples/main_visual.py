@@ -125,8 +125,8 @@ class Trainer:
 
                 self.save_model("last", eval_metrics)
                 
-                saved_eval_metrics = self.evaluate_pretrained_model("last")
-                self.logger.log_scalars("eval_saved", saved_eval_metrics, step=self.global_frame)
+                # saved_eval_metrics = self.evaluate_pretrained_model("last")
+                # self.logger.log_scalars("eval_saved", saved_eval_metrics, step=self.global_frame)
                 
                 # collect medium data
                 if self.cfg.medium_data_num != 0 and self.best_success == 0 and eval_metrics["success_mean"] > 0:
@@ -138,10 +138,10 @@ class Trainer:
                     break
 
                 # save the best model 
-                if eval_metrics["return_mean"] > self.best_return and eval_metrics["success_mean"] >= self.best_success:
-                    self.best_return = eval_metrics["return_mean"]
-                    self.best_success = eval_metrics["success_mean"]
-                    self.save_model("best_return", eval_metrics)
+                # if eval_metrics["return_mean"] > self.best_return and eval_metrics["success_mean"] >= self.best_success:
+                #     self.best_return = eval_metrics["return_mean"]
+                #     self.best_success = eval_metrics["success_mean"]
+                #     self.save_model("best_return", eval_metrics)
                 
                 
                 
@@ -228,15 +228,18 @@ class Trainer:
         return metrics
     
     def collect_medium_data(self):
+        index = self.replay_buffer.index
+        length = (self.cfg.medium_data_num + 1) * 250
         self.save_data(
             level='medium',
-            observation_list=self.replay_buffer.obs,
-            action_list=self.replay_buffer.act,
-            reward_list=self.replay_buffer.rew,
-            is_terminal_list=self.replay_buffer.terminal,
-            is_success_list=self.replay_buffer.success,
-            is_first_list=self.replay_buffer.first,
-            is_last_list=self.replay_buffer.last
+            observation_list=self.replay_buffer.obs[index-length:index],
+            action_list=self.replay_buffer.act[index-length:index],
+            reward_list=self.replay_buffer.rew[index-length:index],
+            is_terminal_list=self.replay_buffer.terminal[index-length:index],
+            is_success_list=self.replay_buffer.success[index-length:index],
+            is_first_list=self.replay_buffer.first[index-length:index],
+            is_last_list=self.replay_buffer.last[index-length:index],
+            eval_episode=self.cfg.medium_data_num
         )
         
     
