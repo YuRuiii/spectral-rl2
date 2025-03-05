@@ -1,9 +1,9 @@
 export PYTHONPATH=$PYTHONPATH:/home/wangyc/yr/spectral-rl2/ && export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib/nvidia && export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/wangyc/.mujoco/mujoco210/bin && conda activate yr
-export PYTHONPATH=$PYTHONPATH:~/spectral-rl2 && export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib/nvidia && export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/amax/.mujoco/mujoco210/bin
+conda activate rl2 && export PYTHONPATH=$PYTHONPATH:~/spectral-rl2 && export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib/nvidia && export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/amax/.mujoco/mujoco210/bin
 
 python examples/main_visual.py task=metaworld_assembly device=cuda:0 # 没学会
 python examples/main_visual.py task=metaworld_box-close device=cuda:1 # -> 已 1.0
-python examples/main_visual.py task=metaworld_button-press device=cuda:2 # -> 已 1.0
+python examples/main_visual.py task=metaworld_button-press device=cuda:1 # -> 已 1.0
 python examples/main_visual.py task=metaworld_coffee-push device=cuda:3 # -> 已 1.0
 python examples/main_visual.py task=metaworld_door-close device=cuda:0 # -> 已 1.0
 python examples/main_visual.py task=metaworld_drawer-open device=cuda:1 # 还没学会

@@ -32,9 +32,15 @@ class VisualReplayBuffer(object):
         # which timesteps can be validly sampled (Not within nstep from end of
         # an episode or last recorded observation)
         self.valid = np.zeros([self.buffer_size], dtype=np.bool_)
+        
+        self.terminal = np.zeros([self.buffer_size], dtype=np.bool_)
+        self.success = np.zeros([self.buffer_size], dtype=np.bool_)
+        self.first = np.zeros([self.buffer_size], dtype=np.bool_)
+        self.last = np.zeros([self.buffer_size], dtype=np.bool_)
 
     def add_data_point(self, time_step):
         first = time_step.first()
+        
         latest_obs = time_step.observation[-self.ims_channels:]
         if first:
             # if first observation in a trajectory, record frame_stack copies of it
@@ -64,6 +70,10 @@ class VisualReplayBuffer(object):
             self.valid[(self.index + self.frame_stack) % self.buffer_size] = False
             if self.traj_index >= self.nstep:
                 self.valid[(self.index - self.nstep + 1) % self.buffer_size] = True
+            self.terminal[self.index] = time_step.last() or time_step.success
+            self.success[self.index] = time_step.success
+            self.first[self.index] = time_step.first()
+            self.last[self.index] = time_step.last()
             self.index += 1
             self.traj_index += 1
             if self.index == self.buffer_size:

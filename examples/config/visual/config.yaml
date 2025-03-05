@@ -12,6 +12,8 @@ device: null
 save_video: true
 mode: train
 model_dir: null
+expert_data_num: 500
+medium_data_num: 500
 
 # env
 task: metaworld_door-open
