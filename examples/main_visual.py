@@ -162,10 +162,12 @@ class Trainer:
             self.global_step += 1
             
     def evaluate(self, agent, collect=None, eval_episode=None):
+    def evaluate(self, agent, collect=None, eval_episode=None):
         agent.train(False)
         all_lengths = []
         all_returns = []
         all_success = []
+        for i_episode in range(eval_episode):
         for i_episode in range(eval_episode):
             time_step = self.eval_env.reset()
             length = ret = success = 0
@@ -200,7 +202,9 @@ class Trainer:
                     is_last_list.append(time_step.last())
                 
             if collect:
+            if collect:
                 self.save_data(
+                    'expert',
                     'expert',
                     observation_list,
                     action_list,
@@ -284,8 +288,12 @@ class Trainer:
         return self.evaluate(self.agent, collect, eval_episode)
 
     def evaluate_pretrained_model(self, name, collect=None, eval_episode=None):
+    def evaluate_pretrained_model(self, name, collect=None, eval_episode=None):
         agent = self.get_agent()
         agent = self.load_model(agent, name)
+        collect = (self.cfg.mode == 'collect') if collect is None else collect
+        eval_episode = self.cfg.eval_episode if eval_episode is None else eval_episode
+        return self.evaluate(agent, collect, eval_episode)
         collect = (self.cfg.mode == 'collect') if collect is None else collect
         eval_episode = self.cfg.eval_episode if eval_episode is None else eval_episode
         return self.evaluate(agent, collect, eval_episode)
@@ -306,6 +314,10 @@ class Trainer:
         
     def load_model(self, agent, name):
         # Load pretrained model
+        if self.cfg.model_dir is None:
+            print("model_dir is not set, using default path")
+            self.cfg.model_dir = self.logger.log_dir
+        path = f"{self.cfg.model_dir}/{name}"
         if self.cfg.model_dir is None:
             print("model_dir is not set, using default path")
             self.cfg.model_dir = self.logger.log_dir
@@ -344,6 +356,7 @@ class Trainer:
     def save_data(
         self, 
         level,
+        level,
         observation_list,
         action_list,
         reward_list,
@@ -351,6 +364,7 @@ class Trainer:
         is_success_list,
         is_first_list,
         is_last_list,
+        eval_episode,
         eval_episode,
     ):
         os.makedirs(f'data2', exist_ok=True)
@@ -363,6 +377,10 @@ class Trainer:
             observation=np.array(observation_list, dtype=np.uint8),
             action=np.array(action_list, dtype=np.float32),
             reward=np.array(reward_list, dtype=np.float32),
+            is_terminal=np.array(is_terminal_list, dtype=np.bool_),
+            is_success=np.array(is_success_list, dtype=np.bool_),
+            is_first=np.array(is_first_list, dtype=np.bool_),
+            is_last=np.array(is_last_list, dtype=np.bool_)
             is_terminal=np.array(is_terminal_list, dtype=np.bool_),
             is_success=np.array(is_success_list, dtype=np.bool_),
             is_first=np.array(is_first_list, dtype=np.bool_),
