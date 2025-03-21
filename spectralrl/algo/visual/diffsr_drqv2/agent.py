@@ -332,3 +332,26 @@ class DiffSR_DrQv2(BaseVisualAlgorithm):
             "loss/actor_loss": actor_loss.item(),
             "info/policy_std": stddev
         }, actor_loss
+        
+    def save_model(self, path):
+        """Save model parameters to path."""
+        torch.save({
+            'vae': self.vae.state_dict(),
+            'actor': self.actor.state_dict(),
+            'critic': self.critic.state_dict(),
+            'critic_target': self.critic_target.state_dict(),
+            'diffusion': self.diffusion.state_dict(),
+            'diffusion_target': self.diffusion_target.state_dict(),
+            'scaler': self.scaler.state_dict()
+        }, path)
+        
+    def load_model(self, path):
+        """Load model parameters from path."""
+        checkpoint = torch.load(path)
+        self.vae.load_state_dict(checkpoint['vae'])
+        self.actor.load_state_dict(checkpoint['actor'])
+        self.critic.load_state_dict(checkpoint['critic']) 
+        self.critic_target.load_state_dict(checkpoint['critic_target'])
+        self.diffusion.load_state_dict(checkpoint['diffusion'])
+        self.diffusion_target.load_state_dict(checkpoint['diffusion_target'])
+        self.scaler.load_state_dict(checkpoint['scaler'])

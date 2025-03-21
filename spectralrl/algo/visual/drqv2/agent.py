@@ -143,3 +143,20 @@ class DrQv2(BaseVisualAlgorithm):
             "loss/actor_loss": actor_loss.item(),
             "info/policy_std": stddev
         }
+    
+    def save_model(self, path):
+        """Save model parameters to path."""
+        torch.save({
+            'encoder': self.encoder.state_dict(),
+            'actor': self.actor.state_dict(), 
+            'critic': self.critic.state_dict(),
+            'critic_target': self.critic_target.state_dict()
+        }, path)
+
+    def load_model(self, path):
+        """Load model parameters from path."""
+        state_dict = torch.load(path)
+        self.encoder.load_state_dict(state_dict['encoder'])
+        self.actor.load_state_dict(state_dict['actor'])
+        self.critic.load_state_dict(state_dict['critic'])
+        self.critic_target.load_state_dict(state_dict['critic_target'])
