@@ -16,7 +16,6 @@ from spectralrl.utils.video import VideoRecorder
 os.environ['MKL_SERVICE_FORCE_INTEL'] = '1'
 os.environ['MUJOCO_GL'] = 'egl'
 
-
 class Trainer:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -85,6 +84,8 @@ class Trainer:
         cfg = self.cfg
 
         ep_step, ep_return, ep_succ = 0, 0, 0
+        
+        medium_collected = False
         time_step = self.train_env.reset()
         self.replay_buffer.add(time_step)
         for i_frame in trange(cfg.train_frames // cfg.action_repeat + 1, desc="main"):
@@ -124,18 +125,34 @@ class Trainer:
                 self.logger.info(eval_metrics)
 
                 self.save_model("last", eval_metrics)
-                saved_eval_metrics = self.evaluate_pretrained_model("last")
-                self.logger.log_scalars("eval_saved", saved_eval_metrics, step=self.global_frame)
-
-                # save the best model 
-                if eval_metrics["return_mean"] > self.best_return and eval_metrics["success_mean"] >= self.best_success:
-                    self.best_return = eval_metrics["return_mean"]
-                    self.best_success = eval_metrics["success_mean"]
-                    self.save_model("best_return", eval_metrics)
-                    
-                    if self.best_success == 1:
-                        break
                 
+                # saved_eval_metrics = self.evaluate_pretrained_model("last")
+                # self.logger.log_scalars("eval_saved", saved_eval_metrics, step=self.global_frame)
+                
+                # collect medium data
+                # if self.best_success == 0 and eval_metrics["success_mean"] > 0:
+                if eval_metrics["success_mean"] > 0:
+                    self.save_model("medium", eval_metrics)
+                # if not medium_collected and eval_metrics["success_mean"] > 0:
+                #     medium_collected = self.collect_medium_data()
+                #     print(f"medium collected: {medium_collected}")
+                #     if medium_collected:
+                #         self.save_model("medium", eval_metrics)
+                    
+                # save the best model 
+                # if eval_metrics["return_mean"] > self.best_return and eval_metrics["success_mean"] >= self.best_success:
+                #     self.best_return = eval_metrics["return_mean"]
+                #     self.best_success = eval_metrics["success_mean"]
+                #     self.save_model("best_return", eval_metrics)
+                
+                # collect expert data
+                # if self.cfg.expert_data_num != 0 and eval_metrics["success_mean"] == 1:
+                #     self.evaluate_training_model(collect=True, eval_episode=self.cfg.expert_data_num)
+                
+                # if self.best_success == 1:
+                # if medium_collected and self.best_success > 0:
+                #     break
+
             time_step = self.train_env.step(action)
             ep_return += time_step.reward
             ep_step += 1
@@ -144,17 +161,17 @@ class Trainer:
             self.replay_buffer.add(time_step)
             self.global_step += 1
             
-    def evaluate(self, agent):
+    def evaluate(self, agent, collect=None, eval_episode=None):
         agent.train(False)
         all_lengths = []
         all_returns = []
         all_success = []
-        for i_episode in range(self.cfg.eval_episode):
+        for i_episode in range(eval_episode):
             time_step = self.eval_env.reset()
             length = ret = success = 0
             self.recorder.init(self.eval_env, enabled=(i_episode==0))
             
-            if self.cfg.mode == "collect":
+            if collect:
                 observation_list = []
                 action_list = []
                 reward_list = []
@@ -173,17 +190,18 @@ class Trainer:
                 success += float(time_step.success)
                 
                 # save to buffer
-                if self.cfg.mode == "collect":
-                    observation_list.append(time_step.observation)
+                if collect:
+                    observation_list.append(time_step.observation[-3:])
                     action_list.append(action)
                     reward_list.append(time_step.reward)
                     is_terminal_list.append(time_step.last() or time_step.success)
                     is_success_list.append(time_step.success)
-                    is_first_list.append(len(observation_list) == 1)
+                    is_first_list.append(time_step.first())
                     is_last_list.append(time_step.last())
                 
-            if self.cfg.mode == "collect":
+            if collect:
                 self.save_data(
+                    'expert',
                     observation_list,
                     action_list,
                     reward_list,
@@ -217,13 +235,60 @@ class Trainer:
         agent.train(True)
         return metrics
     
-    def evaluate_training_model(self):
-        return self.evaluate(self.agent)
+    def collect_medium_data(self):
+        # medium data will be modified in the future
+        index = self.replay_buffer.index
+        length = (self.cfg.medium_data_num + 1) * 255
+        
+        # self.buffer is ring buffer, so we have to check whether all [index-length:index] is valid
+        
+        data_count = np.sum(self.replay_buffer.valid == True)
+        
+        if data_count < length:
+            return False
+        
+        if index >= length:
+            # assert np.all(self.replay_buffer.valid[index-length:index] == True)
+            self.save_data(
+                level='medium',
+                observation_list=self.replay_buffer.obs[index-length:index],
+                action_list=self.replay_buffer.act[index-length:index],
+                reward_list=self.replay_buffer.rew[index-length:index],
+                is_terminal_list=self.replay_buffer.terminal[index-length:index],
+                is_success_list=self.replay_buffer.success[index-length:index],
+                is_first_list=self.replay_buffer.first[index-length:index],
+                is_last_list=self.replay_buffer.last[index-length:index],
+                eval_episode=self.cfg.medium_data_num
+            )
+        else:
+            # assert np.all(np.concatenate([self.replay_buffer.valid[index-length:], self.replay_buffer.valid[:index]], axis=0) == True)
+            self.save_data(
+                level="medium",
+                observation_list=np.concatenate([self.replay_buffer.obs[index-length:], self.replay_buffer.obs[:index]], axis=0),
+                action_list=np.concatenate([self.replay_buffer.act[index-length:], self.replay_buffer.act[:index]], axis=0),
+                reward_list=np.concatenate([self.replay_buffer.rew[index-length:], self.replay_buffer.rew[:index]], axis=0),
+                is_terminal_list=np.concatenate([self.replay_buffer.terminal[index-length:], self.replay_buffer.terminal[:index]], axis=0),
+                is_success_list=np.concatenate([self.replay_buffer.success[index-length:], self.replay_buffer.success[:index]], axis=0),
+                is_first_list=np.concatenate([self.replay_buffer.first[index-length:], self.replay_buffer.first[:index]], axis=0),
+                is_last_list=np.concatenate([self.replay_buffer.last[index-length:], self.replay_buffer.last[:index]], axis=0),
+                eval_episode=self.cfg.medium_data_num
+            )
+            
+        return True
+            
+        
+    
+    def evaluate_training_model(self, collect=None, eval_episode=None):
+        collect = (self.cfg.mode == 'collect') if collect is None else collect
+        eval_episode = self.cfg.eval_episode if eval_episode is None else eval_episode
+        return self.evaluate(self.agent, collect, eval_episode)
 
-    def evaluate_pretrained_model(self, name):
+    def evaluate_pretrained_model(self, name, collect=None, eval_episode=None):
         agent = self.get_agent()
         agent = self.load_model(agent, name)
-        return self.evaluate(agent)
+        collect = (self.cfg.mode == 'collect') if collect is None else collect
+        eval_episode = self.cfg.eval_episode if eval_episode is None else eval_episode
+        return self.evaluate(agent, collect, eval_episode)
     
     def get_agent(self):
         algo_cls = {
@@ -241,7 +306,10 @@ class Trainer:
         
     def load_model(self, agent, name):
         # Load pretrained model
-        path = f"/{self.cfg.model_dir}/{name}"
+        if self.cfg.model_dir is None:
+            print("model_dir is not set, using default path")
+            self.cfg.model_dir = self.logger.log_dir
+        path = f"{self.cfg.model_dir}/{name}"
 
         agent.actor.load_state_dict(torch.load(f"{path}/actor.pt"))
         agent.critic.load_state_dict(torch.load(f"{path}/critic.pt"))
@@ -266,15 +334,6 @@ class Trainer:
         torch.save(obj=self.agent.actor.state_dict(), f=os.path.join(dir, "actor.pt"))
         torch.save(obj=self.agent.critic.state_dict(), f=os.path.join(dir, "critic.pt"))
         
-        # if self.cfg.algo.cls == "diffsr_drqv2":
-        #     self.logger.log_object(name="vae.pt", object=self.agent.vae.state_dict(), path=dir)
-        # elif self.cfg.algo.cls == "drqv2":
-        #     self.logger.log_object(name="encoder.pt", object=self.agent.encoder.state_dict(), path=dir)
-        # else:
-        #     raise NotImplementedError
-        # self.logger.log_object(name="actor.pt", object=self.agent.actor.state_dict(), path=dir)
-        # self.logger.log_object(name="critic.pt", object=self.agent.critic.state_dict(), path=dir)
-        
         if eval_metrics is not None:
             info = f"{self.global_episode}, save {name}, return {eval_metrics['return_mean']}, success {eval_metrics['success_mean']}"
             print(info)
@@ -284,6 +343,7 @@ class Trainer:
             
     def save_data(
         self, 
+        level,
         observation_list,
         action_list,
         reward_list,
@@ -291,11 +351,11 @@ class Trainer:
         is_success_list,
         is_first_list,
         is_last_list,
-        eval_episode
+        eval_episode,
     ):
-        os.makedirs('/data2/wangyc/spectral-rl2/data', exist_ok=True)
-        os.makedirs(f'/data2/wangyc/spectral-rl2/data/{self.cfg.algo.cls}_{self.cfg.task}_expert', exist_ok=True)
-        path = f"/data2/wangyc/spectral-rl2/data/{self.cfg.algo.cls}_{self.cfg.task}_expert/{eval_episode}_success{int(sum(is_success_list))}.npz"
+        os.makedirs(f'data2', exist_ok=True)
+        os.makedirs(f'data2/{self.cfg.algo.cls}_{self.cfg.task}_{level}', exist_ok=True)
+        path = f"data2/{self.cfg.algo.cls}_{self.cfg.task}_{level}/{eval_episode}_success{int(sum(is_success_list))}.npz"
         
         # turn list to numpy array
         np.savez(
@@ -303,10 +363,10 @@ class Trainer:
             observation=np.array(observation_list, dtype=np.uint8),
             action=np.array(action_list, dtype=np.float32),
             reward=np.array(reward_list, dtype=np.float32),
-            is_terminal=np.array(is_terminal_list, dtype=bool),
-            is_success=np.array(is_success_list, dtype=bool),
-            is_first=np.array(is_first_list, dtype=bool),
-            is_last=np.array(is_last_list, dtype=bool)
+            is_terminal=np.array(is_terminal_list, dtype=np.bool_),
+            is_success=np.array(is_success_list, dtype=np.bool_),
+            is_first=np.array(is_first_list, dtype=np.bool_),
+            is_last=np.array(is_last_list, dtype=np.bool_)
         )
 
 @hydra.main(version_base=None, config_path="./config/visual", config_name="config")
