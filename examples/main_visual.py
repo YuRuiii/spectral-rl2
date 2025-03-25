@@ -119,7 +119,7 @@ class Trainer:
                 self.logger.log_scalars("", train_metrics, step=self.global_frame)
 
             if self.global_frame % cfg.eval_frames == 0:
-                eval_metrics = self.evaluate_training_model()
+                eval_metrics = self.evaluate()
                 self.logger.log_scalars("eval", eval_metrics, step=self.global_frame)
                 self.logger.info(eval_metrics)
 
@@ -127,7 +127,7 @@ class Trainer:
                 
                 if eval_metrics["success_mean"] > 0:
                     medium_model_count += 1
-                    self.save_model(f"medium_{medium_model_count}", eval_metrics)
+                    self.save_model(f"medium{medium_model_count}_{eval_metrics['success_mean']}_{eval_metrics['return_mean']}", eval_metrics)
                     if medium_model_count >= 3:
                         print("Saved 3 medium models, stopping training")
                         return
@@ -140,19 +140,19 @@ class Trainer:
             self.replay_buffer.add(time_step)
             self.global_step += 1
             
-    def evaluate(self, agent, eval_episode=None):
+    def evaluate(self):
         """Evaluate agent performance."""
-        agent.train(False)
+        self.agent.train(False)
         all_lengths = []
         all_returns = []
         all_success = []
-        for i_episode in range(eval_episode):
+        for i_episode in range(self.cfg.eval_episode):
             time_step = self.eval_env.reset()
             length = ret = success = 0
             self.recorder.init(self.eval_env, enabled=(i_episode==0))
             
             while not time_step.last():
-                action = agent.select_action(time_step.observation, self.global_step, deterministic=True)
+                action = self.agent.select_action(time_step.observation, self.global_step, deterministic=True)
                 time_step = self.eval_env.step(action)
                 self.recorder.record(self.eval_env)
                 ret += time_step.reward
@@ -176,20 +176,20 @@ class Trainer:
 
         # agent evaluate if needed
         if self.global_frame != 0: # make sure there is sample
-            agent_metrics, reconstruction = agent.evaluate(self.replay_buffer)
+            agent_metrics, reconstruction = self.agent.evaluate(self.replay_buffer)
             metrics.update(agent_metrics)
             if reconstruction is not None:
                 self.logger.log_image("info/reconstruction", reconstruction, step=self.global_frame)
-        agent.train(True)
+        self.agent.train(True)
         return metrics
 
     def collect_medium_data(self, eval_episode, sigma=0.2):
         """Collect data by sampling from three different agents."""
         # Load 3 different models
         agents = []
-        for i in range(3):
+        for i in range(1, 4):
             agent_copy = self.get_agent()
-            self.load_model(agent_copy, f"medium_{i}")
+            self.load_model(agent_copy, f"medium{i}")
             agents.append(agent_copy)
             
         episodes_per_agent = eval_episode // 3
@@ -250,7 +250,7 @@ class Trainer:
         if self.cfg.model_dir is None:
             print("model_dir is not set, using default path")
             self.cfg.model_dir = self.logger.log_dir
-        path = f"{self.cfg.model_dir}/{name}.pt"
+        path = f"{self.cfg.model_dir}/{name}/model.pt"
         agent.load_model(path)
         return agent
 
@@ -299,7 +299,7 @@ def main(cfg: DictConfig) -> None:
     if cfg.mode == "train":
         trainer.train()
     elif cfg.mode == "collect":
-        trainer.evaluate_pretrained_model("last")
+        trainer.collect_medium_data(cfg.eval_episode)
     else:
         raise NotImplementedError
 
